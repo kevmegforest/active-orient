@@ -87,10 +87,14 @@ designs a list of "Key =  Value" pairs combined by "and" or the binding  provide
     ".outV() "
       when :in_vertex
     ".inV() "
+      when :both_vertex
+    ".bothV() "
       when :out_edge
     ".outE(#{fillup}) "
       when :in_edge
     ".inE(#{fillup}) "
+      when :both_edge
+    ".bothE(#{fillup}) "
       end
 
     end
@@ -253,7 +257,7 @@ They are connected via " -> " (outE), "<-" (inE) or "--" (both).
 The connection method adds a connection to the statement-stack. 
 
 Parameters:
-  direction: :in, :out, :both
+  direction: :in, :out, :both, :in_edge, :out_edge, :both_edge, :in_vertex, :out_vertex, :both_vertex
   edge_class: to restrict the Query on a certain Edge-Class
   count: To repeat the connection
   as:  Includes a micro-statement to finalize the Match-Query
@@ -264,7 +268,7 @@ It is compiled by calling compose
 =end
 
 def connect direction, edge_class: nil, count: 1, as: nil
-  direction= :both unless [ :in, :out].include? direction
+  direction= :both unless [ :in, :out, :in_edge, :out_edge, :both_edge, :in_vertex, :out_vertex, :both_vertex].include? direction
   match_statements << m = OrientSupport::MatchConnection.new( direction: direction, edge: edge_class, count: count, as: as)
   m
 end
