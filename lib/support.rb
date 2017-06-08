@@ -83,6 +83,14 @@ designs a list of "Key =  Value" pairs combined by "and" or the binding  provide
 	" <-#{fillup}- "
       when :out
 	" -#{fillup}-> "
+      when :out_vertex
+    ".outV() "
+      when :in_vertex
+    ".inV() "
+      when :out_edge
+    ".outE(#{fillup}) "
+      when :in_edge
+    ".inE(#{fillup}) "
       end
 
     end
