@@ -257,7 +257,7 @@ It is compiled by calling compose
 
 def connect direction, edge_class: nil, count: 1, as: nil
   direction= :both unless [ :in, :out].include? direction
-  match_statements << m = OrientSupport::MatchConnection.new( direction: direction, count: count, as: as)
+  match_statements << m = OrientSupport::MatchConnection.new( direction: direction, edge: edge_class, count: count, as: as)
   m
 end
 
