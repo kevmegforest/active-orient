@@ -7,7 +7,8 @@ module RestOperations
   #     puts "uri:#{function_uri { args.join('/') } }"
     begin
       term = args.join('/')
-      @res["/function/#{@database}/#{term}"].post ''
+		rest_resource = Thread.current['resource'] || get_resource 
+     rest_resource["/function/#{@database}/#{term}"].post ''
     rescue RestClient::InternalServerError => e
   	  puts  JSON.parse(e.http_body)
     end
@@ -19,9 +20,9 @@ module RestOperations
   def count **args
     logger.progname = 'RestOperations#CountRecords'
     query = OrientSupport::OrientQuery.new args
-    query.projection << 'COUNT (*)'
+    query.projection  'COUNT(*)'
     result = get_records raw: true, query: query
-    result.first['COUNT'] rescue  0  # return_value
+    result.first["COUNT(*)"] rescue  0  # return_value
   end
 =begin
 --
@@ -98,69 +99,124 @@ Multible statements are transmitted at once if the Block provides an Array of st
 
 =end
 
-  def execute transaction: true, tolerated_error_code: nil, process_error: true, raw: nil
-    batch = {transaction: transaction, operations: yield}
-    logger.progname= "Execute"
-#    puts "batch: #{batch[:operations]}"
-    unless batch[:operations].blank?
-      batch[:operations] = {:type=>"cmd", :language=>"sql", :command=> batch[:operations]} if batch[:operations].is_a? String
-      batch[:operations] = [batch[:operations]] unless batch[:operations].is_a? Array
-      batch[:operations].compact!
-      # transaction is true only for multible statements
-#      batch[:transaction] = transaction & batch[:operations].size >1
-      begin
-	logger.debug{ batch[:operations].map{|y|y[:command]}.join("; ") } 
-        response = @res["/batch/#{ActiveOrient.database}"].post batch.to_json
-      rescue RestClient::BadRequest => f
-	# extract the misspelled query in logfile and abort
-	sentence=  JSON.parse( f.response)['errors'].last['content']
-	logger.fatal{ " BadRequest --> #{sentence.split("\n")[1]} " }
-	puts "Query not recognized"
-	puts sentence
-	raise
-      rescue RestClient::InternalServerError => e
-        logger.progname = 'RestOperations#Execute'
-	sentence=  JSON.parse( e.response)['errors'].last['content']
-	if tolerated_error_code.present? &&  e.response =~ tolerated_error_code
-	  logger.info{ "tolerated_error::#{e.message}"}
-	else
-	  if process_error
-#	    puts batch.to_json
-#	  logger.error{e.response}
-	  logger.error{sentence}
-	  logger.error{ e.backtrace.map {|l| "  #{l}\n"}.join  }
-#	  logger.error{e.message.to_s}
-	  else 
-	    raise
-	  end
-	end 
-      rescue Errno::EADDRNOTAVAIL => e
-	sleep(2)
-	retry
-      end
-      if response.present? && response.code == 200
-        if response.body['result'].present?
-          result=JSON.parse(response.body)['result']
-	  return result if raw.present?
-          result.map do |x|
-            if x.is_a? Hash
-              if x.has_key?('@class')
-		the_object = ActiveOrient::Model.orientdb_class( name: x['@class'] ).new x
-		ActiveOrient::Base.store_rid( the_object )   # update cache
-              elsif x.has_key?('value')
-                x['value']
-              else   # create a dummy class and fill with attributes from result-set
-                ActiveOrient::Model.orientdb_class(name: 'query' ).new x
-              end
-            end
-          end.compact # return_value
-        else
-          response.body
-        end
-      else
-        nil
-      end
-    end
-  end
+	def read_transaction
+		@transaction
+	end
 
+	def manage_transaction kind, command
+		@transaction = []  unless @transaction.is_a?(Array)
+
+		# in any case:  add statement to array
+		command.is_a?(Array) ? command.each{|c| @transaction << c} : @transaction << command
+
+		# if kind is prepare, we a done. 
+		# now, combine anything
+		unless kind == :prepare
+			commands =  @transaction.map{|y| y if y.is_a? String }.compact
+			@transaction.delete_if{|y| y if y.is_a?(String)} 
+			#puts "tn #{commands.inspect}"
+				@transaction <<	{ type: 'script', language: 'sql', script: commands } unless  commands.empty?
+	#		elsif  transaction ==  false
+	#			@transaction = 	commands.first
+	#		else
+	#			transaction =  true
+	#			@transaction <<		{ type: 'cmd', language: 'sql', command: commands.first } 
+
+				# transaction is true only for multible statements
+				#      batch[:transaction] = transaction & batch[:operations].size >1
+	#			logger.info{ @transaction.map{|y|y[:command]}.join(";\n ") } 
+#				logger.info{ @transaction.map{|y|y[:script]}.join(";\n ") } 
+		#		batch= { transaction: transaction, operations: @transaction  }
+		#		puts "batch:  #{batch.inspect}"
+
+		#		@res["/batch/#{ActiveOrient.database}"].post batch.to_json
+		end
+	end
+
+	# execute the command 
+	#
+	# thread-safe  ( transaction = false)
+	#
+	# 
+	def execute transaction: nil,
+		          command: nil,
+							tolerated_error_code: nil, 
+							process_error: true, 
+							raw: nil 
+		
+		if block_given?
+			command =  yield
+		end
+	  unless command.present?	
+			logger.error { "No Command  provided to execute" }
+			return nil
+		end
+		if ( transaction.present? || command.is_a?(Array) )
+			logger.error  "calling manage_transaction NOT IMPLEMENTED YET!"
+			manage_transaction transaction, command
+		end		
+	
+		 logger.info command.to_s								
+		_execute( tolerated_error_code, process_error, raw) do
+
+			ActiveOrient.db_pool.checkout do | conn |
+				conn["/command/#{ActiveOrient.database}/sql"].post command.to_s #.to_json
+			end
+		end
+
+#		rest_resource.delete #if resource.present?
+
+	end
+
+
+	def _execute tolerated_error_code, process_error, raw
+
+		logger.progname= "Execute"
+
+		begin
+			response = yield
+		rescue RestClient::BadRequest => f
+			# extract the misspelled query in logfile and abort
+			sentence=  JSON.parse( f.response)['errors'].last['content']
+			logger.fatal{ " BadRequest --> #{sentence.split("\n")[1]} " }
+			puts "Query not recognized"
+			puts sentence
+			raise
+		rescue RestClient::Conflict => e  # (409)
+			# most probably the server is busy. we  wait for a second  print an Error-Message and retry
+			sleep(1)
+			logger.error{ e.inspect }
+			logger.error{ "RestClient::Error(409): Server is signaling a conflict ... retrying" }
+			retry
+		rescue RestClient::InternalServerError => e
+			sentence=  JSON.parse( e.response)['errors'].last['content']
+			if tolerated_error_code.present? &&  e.response =~ tolerated_error_code
+				logger.debug('RestOperations#Execute'){ "tolerated_error::#{e.message}"}
+				logger.debug('RestOperations#Execute'){ e.message }
+				nil  # return value
+			else
+				if process_error
+					logger.error{sentence}
+					#logger.error{ e.backtrace.map {|l| "  #{l}\n"}.join  }
+					#	  logger.error{e.message.to_s}
+				else 
+					raise
+				end
+			end 
+		rescue Errno::EADDRNOTAVAIL => e
+			sleep(2)
+			retry
+		else  # code to execute if no exception  is raised
+			if response.code == 200
+				result=JSON.parse(response.body)['result']
+				if raw.present? 
+					result
+				else
+					result.from_orient
+				end # raw present?
+			else
+				logger.error { "code : #{response.code}" }
+			end
+		end
+	end
 end

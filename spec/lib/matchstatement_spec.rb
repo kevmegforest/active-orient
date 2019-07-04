@@ -1,61 +1,66 @@
 require 'spec_helper'
 require 'rest_helper'
+require 'connect_helper'
+require 'rspec/given'
 
 describe OrientSupport::MatchStatement do
   before( :all ) do
-#    ORD = ActiveOrient::OrientDB.new database: 'ArrayTest'
-    reset_database
-    ORD.create_class :test_query
+    @db = connect database: 'temp'
+    @db.create_class :test_query
   end # before
 
+	after(:all){ @db.delete_database database: 'temp' }
   context "Initialize the QueryClass" do
-    it "simple Initialisation" do
-      q =  OrientSupport::MatchStatement.new ORD.classname(TestQuery), where: { a:2 }
-      expect(q).to be_a OrientSupport::MatchStatement
-      expect( q.compose ).to eq '{class: test_query, as: test_queries, where:( a = 2)}'
-      expect( q.compose ).to eq q.compose_simple
-      expect(q.as).to eq 'test_queries'
+    Given( :simple ){ OrientSupport::MatchStatement.new @db.classname(TestQuery), where: { a:2 } }
+      Then { expect( simple ).to be_a OrientSupport::MatchStatement }
+      Then { simple.to_s  == '{class: test_query, as: test_queries, where:( a = 2)}'}
+      Then { simple.compose  ==  simple.compose_simple }
+      Then { simple.as  == 'test_queries' }
     end
   end
-end
 
 
 
-describe OrientSupport::MatchConnection do
+RSpec.describe OrientSupport::MatchConnection do
   before( :all ) do
-#    ORD = ActiveOrient::OrientDB.new database: 'ArrayTest'
-    reset_database
-   ORD.create_class :test_query
+    @db = connect database: 'temp'
+    V.create_class :test_query
+		E.create_class :my_edge
   end # before
 
-  context 'initialize and check output' do
-    it "the detault case" do  
-    c =  OrientSupport::MatchConnection.new 
-      expect( c.compose ).to eq " -- "
+#	after(:all){ @db.delete_database database: 'temp' }
+
+  context 'initialize ' do
+    Given( :c ){ OrientSupport::MatchConnection.new }
+    Then{ expect( c.compose).to eq ' -- ' }
     end
 
-    it "in-edges (2 fold) "  do
-    c =  OrientSupport::MatchConnection.new  direction: :in, count: 3
+    context  "in-edges (2 fold) "  do
+     Given( :i2e ) {  OrientSupport::MatchConnection.new  direction: :in, count: 3 }
+		 Then {   i2e.compose  == " <-- {} <-- {} <-- " }
+		end
 
-      expect( c.compose ).to eq " <-- {} <-- {} <-- "
-  end
-    it "out-edges (2 fold) "  do
-    c =  OrientSupport::MatchConnection.new  direction: :out, count: 3
-      expect( c.compose ).to eq " --> {} --> {} --> "
+    context  "out-edges (2 fold) "  do
+      Given( :o2e ) { OrientSupport::MatchConnection.new  direction: :out, count: 3 }
+      Then { o2e.compose  == " --> {} --> {} --> " }
     end
 
 
-    it "includes edges" do
-    c =  OrientSupport::MatchConnection.new  edge: 'my_edge', direction: :out
-      expect( c.compose ).to eq " -my_edge-> "
-
-    end
-
-    it "includes a ministatement " do
-    c =  OrientSupport::MatchConnection.new  edge: 'my_edge', direction: :out, as: "friend"
-      expect( c.compose ).to eq " -my_edge-> { as: friend } "
+     context "includes edges" do
+     Given( :ie ) { OrientSupport::MatchConnection.new  edge: MyEdge, direction: :out }
+     Then { ie.compose  == " -my_edge-> " }
 
     end
 
-  end
+    context "includes a ministatement " do
+     Given( :icm  ) { OrientSupport::MatchConnection.new  edge: MyEdge, direction: :out, as: "friend" }
+     Then { icm.compose  == " -my_edge-> { as: friend } " }
+
+    end
+
+		context "traverses throught the graph" do
+     Given( :ttg  ) { OrientSupport::MatchConnection.new  edge: MyEdge, direction: :out, while: '$depth < 6' }
+     Then { ttg.compose  == " -my_edge-> { as: friend } " }
+
+		end
 end

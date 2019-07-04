@@ -1,6 +1,9 @@
 module ModelRecord
   ############### RECORD FUNCTIONS ###############
-
+ 
+	def to_s
+		to_human
+	end
   ############# GET #############
 
   def from_orient # :nodoc:
@@ -16,9 +19,12 @@ module ModelRecord
 flag whether a property exists on the Record-level
 =end
   def has_property? property
-    attributes.keys.include? property.to_s
+    attributes.keys.include? property.to_sym
   end
 
+	def properties 
+		{ "@type" => "d", "@class" => self.metadata[:class] }.merge attributes
+	end
 
   #
   # Obtain the RID of the Record  (format: *00:00*)
@@ -39,8 +45,8 @@ The extended representation of RID (format: *#00:00* )
   end
   alias to_orient rrid
 
-  def to_or #:nodoc:
-    rrid
+  def to_or
+    rid.rid? ?  rrid : "{ #{embedded} }"
   end
 =begin
 Query uses the current model-record  as origin of the query.
@@ -52,14 +58,18 @@ ActiveOrient::Model-Object or an Array of Model-Objects as result.
 
 =end
 
-  def query query
+  def query query, delete_cash: false
     
-    sql_cmd = -> (command) {{ type: "cmd", language: "sql", command: command }}
-    result = orientdb.execute do
-      sql_cmd[query.to_s]
-    end
-    if result.is_a? Array
-      OrientSupport::Array.new work_on: self, work_with: result
+    query.from  rrid if query.is_a?( OrientSupport::OrientQuery) && query.from.nil?
+		ActiveOrient::Base.remove_rid( self ) if delete_cash
+    result = orientdb.execute{ query.to_s }
+		result = if block_given?
+							 result.is_a?(Array)? result.map{|x| yield x } : yield(result)
+						 else
+							 result
+						 end
+    if result.is_a? Array  
+      OrientSupport::Array.new work_on: self, work_with: result.orient_flatten
     else
       result
     end  # return value
@@ -89,7 +99,7 @@ Returns the result-set, ie. a Query-Object which contains links to the addressed
       @metadata[:version]
     end
   end
-
+private
   def version= version  # :nodoc:
     @metadata[:version] = version
   end
@@ -97,113 +107,8 @@ Returns the result-set, ie. a Query-Object which contains links to the addressed
   def increment_version # :nodoc: 
     @metadata[:version] += 1
   end
-  ########### UPDATE PROPERTY ############
 
-=begin
-  Convient method for populating embedded- or linkset-properties
-  In both cases an array/a collection is stored in the database.
-  Its called via
-    model.add_item_to_property(linkset- or embedded property, Object_to_be_linked_to\)
-  or
-    mode.add_items_to_property( linkset- or embedded property ) do
-      Array_of_Objects_to_be_linked_to
-      #(actually, the objects must inherent from ActiveOrient::Model, Numeric, String)
-    end
-  
-  The method is aliased by "<<" i.e
-    model.array << new_item
-=end
-
-  def update_item_property method, array, item = nil, &ba # :nodoc:
- #   begin
-      logger.progname = 'ActiveOrient::Model#UpdateItemToProperty'
-      self.attributes[array] = Array.new unless attributes[array].present?
-
-      items = if item.present?
-		item.is_a?(Array)? item : [item]  
-	      elsif block_given?
-		yield
-	      end
-      db.manipulate_relation self, method, array, items
-    end
-=begin
-Add Items to a linked or embedded class
-
-Parameter:
-
-[array] the name of the property to work on
-[item ]  what to add (optional)
-[block]  has to provide an array of elements to add to the property
-
-Example: add 10 elements to the property
-
-   add_item_to_property :second_list do
-       (0 .. 9).map do | s |
-               SecondList.create label: s
-       end  
-   end
-
-
-The method returns the model record itself. Thus nested initialisations are possible:
-   
-       ORD.create_classes([:base, :first_list, :second_list ]){ "V" }
-       ORD.create_property :base, :first_list,  type: :linklist, linkedClass: :first_list
-       ORD.create_property :base, :label, index: :unique
-       ORD.create_property :first_list,  :second_list , type: :linklist, linkedClass: :second_list
-       ORD.create_vertex_class :log
-       (0 .. 9).each do | b |
-          base= Base.create label: b, first_list: []
-          base.add_item_to_property :first_list do
-             (0 .. 9).map do | f |
-                first = FirstList.create label: f, second_list: []
-	         base.add_item_to_property :first_list , first
-	         first.add_item_to_property :second_list do
-	           (0 .. 9).map{| s |  SecondList.create label: s }
-	         end    # add item  second_list
-	      end      # 0..9 -> f
-	   end        # add item  first_list
-	end        # 0..9 -> b
-
-
-Record#AddItemToProperty shines with its feature to specify records to insert in a block.
-
-If only single Items are to  be inserted, use
-  model_record.linklist << item 
-
-=end
-
-  def add_item_to_property array, *item
-       item =  yield if block_given?
-	if attributes.keys.include? array.to_s
-	  item.each{|x| self.attributes[array].push x.to_orient }
-	  update
-	else
-	  update array=> item 
-	end	
-#  rescue NoMethodError
-    #undefined method `<<' for nil:NilClass
-
-  end
-
-
-  def set_item_to_property array, *item  # :nodoc:
-      update  array.to_s => item
-  end
-
-  def remove_position_from_property array, *pos  # :nodoc:
-      if attributes[array].is_a? Array
-        pos.each{|x| self.attributes[array].delete_at( x )}
-	update
-      end
-  end
-  def remove_item_from_property array, *item 
-      if attributes[array].is_a? Array
-        item.each{|x| self.attributes[array].delete( x.to_orient )}
-	update
-      else
-	logger.error  "Wrong attribute: #{attributes[array]}"
-      end
-  end
+public
 
   ############# DELETE ###########
 
@@ -211,64 +116,59 @@ If only single Items are to  be inserted, use
 #
 # It is overloaded in Vertex and Edge.
 
-def remove 
-  orientdb.delete_record self
-  ActiveOrient::Base.remove_rid self ##if is_edge? # removes the obj from the rid_store
+def delete 
+  orientdb.delete_record  self 
 end
 
-alias delete remove
 
 ########### UPDATE ############
 
 =begin
-Convient update of the dataset by calling sql-patch
+Convient update of the dataset 
 
 Previously changed attributes are saved to the database.
 
 Using the optional :set argument ad-hoc attributes can be defined
-
-    obj = ActiveOrient::Model::Contracts.first
+    V.create_class :contracts
+    obj = Contracts.first
     obj.name =  'new_name'
     obj.update set: { yesterdays_event: 35 }
 updates both, the »name« and the »yesterdays_event«-properties
 
 _note:_ The keyword »set« is optional, thus
     obj.update  yesterdays_event: 35 
-is identical
+is identical to the update statement above
 =end
 
-  def update set: {}, **args
+  def update set:{}, add: nil, to: nil, **args
     logger.progname = 'ActiveOrient::Model#Update'
-    self.attributes.merge!(set) if set.present?
-    self.attributes.merge!(args) if args.present?
-    self.attributes['updated_at'] =  DateTime.now
-    if rid.rid?
-      updated_data= db.update self, attributes, @metadata[:version]
-      # if the updated dataset changed, drop the changes made siently
-      if updated_data.is_a? Hash
-	self.version =  updated_data["@version"]
-	self # return value
-      else
-	logger.error{ "UPDATE:  #{rrid} "}
-	logger.error{ "Version Conflict: reloading database values, local updates are lost!"}
-	logger.error{ "The Args: #{attributes.inspect} "}
-	logger.error{ "The Object: #{updated_data.inspect} "}
-	reload!
-      end
-    else
-      save 
-    end
 
+		if block_given?			# calling vs. a block is used internally
+			# to remove an Item from lists and sets call update(remove: true){ query }
+			set_or_remove =  args[:remove].present? ? "remove" : "set"
+			#transfer_content from: 	 
+			updated_record = 	query( "update #{rrid} #{set_or_remove} #{ yield }  return after @this", delete_cash: true )&.first
+			transfer_content from: updated_record  if updated_record.present?
+		else
+			set.merge! args
+			#	set.merge updated_at: DateTime.now
+			if rid.rid?
+				db.update( self, set, version )
+				reload!
+			else  # new record
+				@attributes.merge! set
+				save
+			end
+		end
   end
 
 # mocking active record  
   def update_attribute the_attribute, the_value # :nodoc:
-    update set: {the_attribute => the_value }
-    super the_attribute, the_value
+    update( delete_cash: true ){ " #{the_attribute} = #{the_value.to_or} " }
   end
 
   def update_attributes **args    # :nodoc:
-    update set: args
+    update  args
   end
 
   ########## SAVE   ############
@@ -286,33 +186,21 @@ Saves the record  by calling update  or  creating the record
   a.save
 
 =end
-def save
-  if rid.rid?
-    update
-  else
-    the_record =   db.create_record  self, attributes: attributes, cache: false 
-    transfer_content from: the_record
-    ActiveOrient::Base.store_rid self
-  end
-end
+	def save
+		transfer_content from:  if rid.rid?
+															db.update self, attributes, version
+														else
+															db.create_record  self, attributes: attributes, cache: false 
+														end
+		ActiveOrient::Base.store_rid self
+	end
 
-=begin
-  Overwrite the attributes with Database-Contents 
-
-  If a record is provided as argument, those attributes and metadata are copied to the object
-=end
-
-  def reload! updated_dataset = nil
-    updated_dataset = db.get_record(rid) if updated_dataset.nil?
-    transfer_content from: updated_dataset
-  self
+  def reload! 
+    transfer_content from: db.get_record(rid) 
+		self
   end
 
 
-  def transfer_content  from:
-       @metadata = from.metadata
-       @attributes =  from.attributes
-  end
   ########## CHECK PROPERTY ########
 
 =begin
@@ -340,13 +228,14 @@ Example:
   a.test	  # <--- attribute: 'test' --> fetch attributes[:test]
 
 Assignments are performed only in ruby-space.
+
 Automatic database-updates are deactivated for now
 =end
   def method_missing *args
     # if the first entry of the parameter-array is a known attribute
     # proceed with the assignment
     if args.size == 1
-       attributes[args.first.to_s]  # return the attribute-value
+       attributes[args.first.to_sym]  # return the attribute-value
     elsif args[0][-1] == "=" 
       if args.size == 2
 #	if rid.rid? 
@@ -359,11 +248,26 @@ Automatic database-updates are deactivated for now
 #	update set: {args[0][0..-2] => args[1 .. -1] } if rid.rid?
       end
     else
-      logger.error{" Unknown method-call: #{args.first.to_s} "}
-      raise NameError
+      raise NameError, "Unknown method call #{args.first.to_s}", caller
     end
   end
 #end
 
-
+#protected
+  def transfer_content  from:
+		# »from« can be either 
+		# a model record (in case of  create-record, get_record) or
+		# a hash containing {"@type"=>"d", "@rid"=>"#xx:yy", "@version"=>n, "@class"=>'a_classname'} 
+		# and a list of updated properties (in case of db.update). Then  update the version field and the 
+		# attributes.
+			if from.is_a? ActiveOrient::Model
+       @metadata = from.metadata
+       self.attributes =  from.attributes
+			else
+				self.version =  from['@version']
+				# throw from["@..."] away and convert keys to symbols, merge that into attributes
+				@attributes.merge! Hash[ from.delete_if{|k,_| k =~ /^@/}.map{|k,v| [k.to_sym, v.from_orient]}]
+			end
+			self  # return the modified object
+  end
 end

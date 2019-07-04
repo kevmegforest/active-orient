@@ -28,11 +28,12 @@ module OrientDB
 end  # module OrientDB
 require 'active_model'
 #require 'active_model/serializers'
-require_relative "support.rb"
-require_relative "conversions.rb"
+require_relative "support/orientquery.rb"
+require_relative "support/conversions.rb"
+#require_relative "support/logging.rb"
 require_relative "base.rb"
 require_relative "base_properties.rb"
-require_relative "orient.rb"
+require_relative "support/orient.rb"
 #require_relative "query.rb"
 if OrientDB::UsingJava
   require_relative 'java-api.rb'
@@ -46,12 +47,15 @@ require_relative "model/model.rb"
 require 'active_support/core_ext/string' # provides blank?, present?, presence etc
 require_relative 'init.rb'
 # create Base Classes
+
 require_relative "model/vertex.rb"
 require_relative "model/edge.rb"
 
+require_relative "railtie" if defined?(Rails)
 
 module  ActiveOrient
 mattr_accessor :database
+mattr_accessor :db_pool
 mattr_accessor :database_classes
 mattr_accessor :default_server
 

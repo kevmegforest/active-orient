@@ -8,10 +8,10 @@ Gem::Specification.new do |s|
   s.email       = ["topofocus@gmail.com"]
   s.homepage    = 'https://github.com/topofocus/active-orient'
   s.licenses    = ['MIT']
-  s.summary     = 'Pure ruby client for OrientDB(V.2.2) based on ActiveModel'
-  s.description = 'Persistent ORM for OrientDB(V.2.2), based on ActiveModel. Rails 5 compatible' 
+  s.summary     = 'Pure ruby client for OrientDB(V.3) based on ActiveModel'
+  s.description = 'Persistent ORM for OrientDB(V.3), based on ActiveModel. Rails 5 compatible' 
   s.platform	= Gem::Platform::RUBY
-  s.required_ruby_version = '>= 2.2.5'
+  s.required_ruby_version = '>= 2.5'
   s.date 	= Time.now.strftime "%Y-%m-%d"
   s.test_files  = `git ls-files -- {spec,features}/*`.split("\n")
   s.require_paths = ["lib"]
@@ -24,5 +24,6 @@ Gem::Specification.new do |s|
   s.add_dependency 'activesupport'#, "~> 4.2"
   s.add_dependency 'activemodel'#, "~> 4.2"
   s.add_dependency 'rest-client'  
+  s.add_dependency 'pond'  
 
 end

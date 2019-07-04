@@ -20,6 +20,12 @@ module RestChange
   called from ModelRecord#update
 
   if the update was successful, the updated data are returned as Hash.
+
+  First the cached object is retrieved
+  Its modified by the parameters provided
+  and then patched
+
+  better would be: update the cached object and patch that. 
 =end
 
   def update record, attributes , version=0   
@@ -37,10 +43,8 @@ module RestChange
        JSON.parse(result) # return value
     else
       logger.error{ "REST::Update was not successfull" }
-      logger.error{ "DB-Record #{rrid} is NOT updated "}
        nil   # returnvalue
     end
-    #   ActiveOrient::Model.orientdb_class(name: r.class.ref_name).new(JSON.parse(result))  if result.is_a?(String)
   end
 
 
@@ -58,40 +62,47 @@ Returns the JSON-Response.
 =end
 
   def update_records o_class, set:{}, where: {}, remove: nil
-    logger.progname = 'RestChange#UpdateRecords'
-    url = if set.present?
-      "UPDATE #{classname(o_class)} SET #{generate_sql_list(set)} #{compose_where(where)}"
-    elsif remove.present?
-      "UPDATE #{classname(o_class)} remove #{remove} #{compose_where(where)}"
-    end
-    r = @res[URI.encode("/command/#{ActiveOrient.database}/sql/" << url)].post ''
-    count_of_updated_records = (JSON.parse( r))['result'].first['value']
-     ## remove all records of the class from cache
-    ActiveOrient::Base.display_rid.delete_if{|x,y| y.is_a? o_class } if count_of_updated_records > 0 && o_class.is_a?(Class)
-    count_of_updated_records # return_value
-    rescue Exception => e
-         logger.error{e.message}
-     nil
+		logger.progname = 'RestChange#UpdateRecords'
+		count =  execute do 
+			if set.present?
+				"UPDATE #{classname(o_class)} SET #{generate_sql_list(set)} #{compose_where(where)}"
+			elsif remove.present?
+				"UPDATE #{classname(o_class)} remove #{remove} #{compose_where(where)}"
+			end 
+		end &.first
+	rescue Exception => e
+		logger.error{e.message}
+		nil
 
-    
-  end
+
+	end
 
 # Lazy Updating of the given Record.
-
+# internal using while updating  records
   def patch_record rid	    # :nodoc:   (used by #update )
     logger.progname = 'RestChange#PatchRecord'
     content = yield
-    if content.is_a? Hash
-      begin
-        @res["/document/#{ActiveOrient.database}/#{rid}"].patch content.to_orient.to_json
-      rescue Exception => e
-        logger.error{e.message}
-      end
-    else
-  	  logger.error{"FAILED: The Block must provide an Hash with properties to be updated"}
-    end
-  end
-  alias patch_document patch_record
+		if content.is_a? Hash
+			begin
+				ActiveOrient.db_pool.checkout do | conn |
+					conn["/document/#{ActiveOrient.database}/#{rid}"].patch content.to_orient.to_json
+				end
+			rescue RestClient::Conflict => e  # (409)
+				# most probably the server is busy. we  wait for a second  print an Error-Message and retry
+				sleep(1)
+				logger.error{ "RestClient::Error(409): Server is signaling a conflict ... retrying" }
+				retry
+			rescue RestClient::InternalServerError => e
+				sentence=  JSON.parse( e.response)['errors'].last['content']
+				logger.error{sentence}
+				logger.error{ e.backtrace.map {|l| "  #{l}\n"}.join  }
+				logger.error{e.message.to_s}
+			end
+		else
+			logger.error{"PATCH FAILED: The Block must provide an Hash with properties to be updated"}
+		end
+	end
+	alias patch_document patch_record
 
 
   #### EXPERIMENTAL ##########
@@ -128,12 +139,7 @@ Returns the JSON-Response.
         return 0
       end
 
-      name_class = classname(o_class)
-      execute name_class, transaction: false do # To execute commands
-        [{ type: "cmd",
-          language: 'sql',
-          command: "ALTER PROPERTY #{name_class}.#{property} #{attribute} #{alteration}"}]
-      end
+			execute { "ALTER PROPERTY #{class_name(o_class)}.#{property} #{attribute} #{alteration}"}
     rescue Exception => e
       logger.error{e.message}
     end

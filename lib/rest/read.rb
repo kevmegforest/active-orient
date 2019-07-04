@@ -7,7 +7,10 @@ module RestRead
 #    ORD.get_databases
 #     => ["temp", "GratefulDeadConcerts", (...)] 
   def get_databases
-    JSON.parse(@res["/listDatabases"].get.body)['databases']
+
+		ActiveOrient.db_pool.checkout do | conn |
+			JSON.parse(conn["/listDatabases"].get.body)['databases']
+		end
   end
 
 =begin
@@ -20,18 +23,20 @@ Returns an Array with (unmodified) Class-attribute-hash-Elements
       (...)    ]
 =end
   def get_classes *attributes
-    begin
-    	response = @res["/database/#{ActiveOrient.database}"].get
-    	if response.code == 200
-    	  classes = JSON.parse(response.body)['classes']
-    	  unless attributes.empty?
-    	    classes.map{|y| y.select{|v,_| attributes.include?(v)}}
-    	  else
-    	    classes
-    	  end
-      else
-        []
-      end
+		begin
+			response = ActiveOrient.db_pool.checkout do | conn |
+				conn["/database/#{ActiveOrient.database}"].get
+			end
+			if response.code == 200
+				classes = JSON.parse(response.body)['classes']
+				unless attributes.empty?
+					classes.map{|y| y.select{|v,_| attributes.include?(v)}}
+				else
+					classes
+				end
+			else
+				[]
+			end
     rescue Exception => e
       logger.progname = 'RestRead#GetClasses'
       logger.error{e.message}
@@ -48,11 +53,13 @@ Returns an Array with (unmodified) Class-attribute-hash-Elements
 #    => {"name"=>"a", "superClass"=>"V", "superClasses"=>["V"], "alias"=>nil, "abstract"=>false, "strictmode"=>false, "clusters"=>[65, 66, 67, 68], "defaultCluster"=>65, "clusterSelection"=>"round-robin", "records"=>3} 
 #
   def get_class_properties o_class
-    JSON.parse(@res["/class/#{ActiveOrient.database}/#{classname(o_class)}"].get)
-  rescue => e
-    logger.error  e.message
-    nil
-  end
+			ActiveOrient.db_pool.checkout do | conn |
+				JSON.parse(conn["/class/#{ActiveOrient.database}/#{classname(o_class)}"].get)
+			end
+			rescue => e
+				logger.error  e.message
+				nil
+			end
 
 
   def print_class_properties o_class
@@ -82,38 +89,41 @@ If no Record is found, nil is returned
 The rid-cache is not used or updated
 =end
 
-  def get_record rid
-    begin
-      logger.progname = 'RestRead#GetRecord'
-      if rid.rid?
-	response = @res["/document/#{ActiveOrient.database}/#{rid.to_orient[1..-1]}"].get
-	raw_data = JSON.parse(response.body) 
-#	ActiveOrient::Model.use_or_allocate( raw_data['@rid'] ) do 
-	the_object=   ActiveOrient::Model.orientdb_class(name: raw_data['@class']).new raw_data
-	 ActiveOrient::Base.store_rid( the_object )   # update cache
-      else
-	logger.error { "Wrong parameter #{rid.inspect}. " }
-	nil
-      end
-    rescue RestClient::InternalServerError => e
-      if e.http_body.split(':').last =~ /was not found|does not exist in database/
-	nil
-      else
-	logger.error { "Something went wrong" }
-	logger.error { e.http_body.inspect }
-	raise
-      end
-    rescue RestClient::ResourceNotFound => e
-      logger.error { "RID: #{rid} ---> No Record present " }
-      ActiveOrient::Model.remove_rid rid      #  remove rid from cache
-      nil
-    rescue Exception => e
-      logger.error { "Something went wrong" }
-      logger.error { "RID: #{rid} - #{e.message}" }
-      raise
-    end
-  end
-  alias get_document get_record
+	def get_record rid
+		begin
+			logger.progname = 'RestRead#GetRecord'
+			if rid.rid?
+
+				response =  ActiveOrient.db_pool.checkout do | conn |
+					 conn["/document/#{ActiveOrient.database}/#{rid.to_orient[1..-1]}"].get
+				end
+				raw_data = JSON.parse(response.body) 
+				#	ActiveOrient::Model.use_or_allocate( raw_data['@rid'] ) do 
+				the_object=   ActiveOrient::Model.orientdb_class(name: raw_data['@class']).new raw_data
+				ActiveOrient::Base.store_rid( the_object )   # update cache
+			else
+				logger.error { "Wrong parameter #{rid.inspect}. " }
+				nil
+			end
+		rescue RestClient::InternalServerError => e
+			if e.http_body.split(':').last =~ /was not found|does not exist in database/
+				nil
+			else
+				logger.error { "Something went wrong" }
+				logger.error { e.http_body.inspect }
+				raise
+			end
+		rescue RestClient::ResourceNotFound => e
+			logger.error { "RID: #{rid} ---> No Record present " }
+			ActiveOrient::Model.remove_rid rid      #  remove rid from cache
+			nil
+		rescue Exception => e
+			logger.error { "Something went wrong" }
+			logger.error { "RID: #{rid} - #{e.message}" }
+			raise
+		end
+	end
+	alias get_document get_record
 
 =begin
 Retrieves Records from a query
@@ -129,9 +139,11 @@ In this case cached data are used in favour and its not checked if the database 
     query = OrientSupport::OrientQuery.new(args) if query.nil?
     begin
       logger.progname = 'RestRead#GetRecords'
-  	  url = "/query/#{ActiveOrient.database}/sql/" + query.compose(destination: :rest) + "/#{query.get_limit}"
-  	  response = @res[URI.encode(url)].get
-	  JSON.parse(response.body)['result'].map do |record|
+			response =  ActiveOrient.db_pool.checkout do | conn |
+				url = "/query/#{ActiveOrient.database}/sql/" + query.compose(destination: :rest) + "/#{query.get_limit}"
+				conn[URI.encode(url)].get
+			end
+			JSON.parse(response.body)['result'].map do |record|
 	    if raw
 	      record
 	      # query returns an anonymus class: Use the provided Block or the Dummy-Model MyQuery
@@ -160,8 +172,7 @@ In this case cached data are used in favour and its not checked if the database 
   	  logger.error{"Invalid URI detected"}
   	  logger.error query.to_s
   	  logger.info{"Trying batch processing"}
-  	  sql_cmd = -> (command){{type: "cmd", language: "sql", command: command}}
-  	  response = execute{[sql_cmd[query.to_s]]}
+  	  response = execute{ query.to_s}
   	  logger.info{"Success: to avoid this delay use ActiveOrient::Model#query_database instead"}
       response
     end
