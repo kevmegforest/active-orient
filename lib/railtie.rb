@@ -19,6 +19,8 @@ module  ActiveOrient
 	connect_file = Rails.root.join('config', 'connect.yml')
 	connectyml  = YAML.load_file(  connect_file )[:orientdb][:admin]
 	databaseyml  = YAML.load_file(  connect_file )[:orientdb][:database]
+	serveryml = YAML.load_file( connect_file )[:orientdb][:server] if connect_file.present?
+	serverportyml = YAML.load_file( connect_file )[:orientdb][:port] if connect_file.present?
       rescue Errno::ENOENT => e
 	Rails.logger.error{ "config/connect.yml/config.yml not present"  }
 	puts "config/***yml not present"
@@ -36,7 +38,7 @@ module  ActiveOrient
 
        if connectyml.present? and connectyml[:user].present? and connectyml[:pass].present?
         ActiveOrient.default_server= { user: connectyml[:user], password: connectyml[:pass] ,
-	                               server: 'localhost', port: 2480  }
+	                               server: serveryml, port: serverportyml  }
        end
        ActiveOrient::Init.define_namespace namespace: :object
        ::DB = ::ORD = ActiveOrient::OrientDB.new  preallocate: true
