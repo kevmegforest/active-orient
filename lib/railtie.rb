@@ -33,8 +33,8 @@ module  ActiveOrient
       # set the database
       ActiveOrient.database = databaseyml[Rails.env.to_sym] || 'temp'
 
-       # don't allocate models if no file is provided
-       ActiveOrient::Model.keep_models_without_file = false
+       # don't allocate models if no file is provided (by default)
+       ActiveOrient::Model.keep_models_without_file = configyml[:keep_models_without_file].present? configyml[:keep_models_without_file] : false
 
        if connectyml.present? and connectyml[:user].present? and connectyml[:pass].present?
         ActiveOrient.default_server= { user: connectyml[:user], password: connectyml[:pass] ,
