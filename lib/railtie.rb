@@ -41,7 +41,7 @@ module  ActiveOrient
 	                               server: serveryml, port: serverportyml  }
        end
        ActiveOrient::Init.define_namespace namespace: :object
-       ::DB = ::ORD = ActiveOrient::OrientDB.new  preallocate: true
+       ::DB = ::ORD = ActiveOrient::OrientDB.new  preallocate: (configyml[:preallocate].present? ? configyml[:preallocate] : true)
 
     end
 
